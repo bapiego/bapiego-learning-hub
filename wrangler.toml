@@ -1,0 +1,6 @@
+name = "bapiego-learning-hub"
+main = "worker/index.js"
+compatibility_date = "2024-09-23"
+
+# Deploy with: npx wrangler deploy
+# (requires `npm install -g wrangler` and `wrangler login` first)
