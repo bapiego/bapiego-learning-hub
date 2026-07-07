@@ -155,6 +155,7 @@ const app = document.getElementById("app");
 let activeTimerInterval = null;
 let ADMIN_PW = null;
 let STUDENT_SESSION = null;
+let PENDING_QUIZ_SLUG = null;
 
 const COURSES = [
   { code: "bba251", name: "BBA 251: Business Economics I (Micro)", programme: "HRM / PSCM · Level 200", desc: "Scarcity, markets, consumer & producer theory, costs & revenue, market structures, and national income." }
@@ -172,7 +173,10 @@ async function router() {
   if (parts[0] === "course") return renderCourse(parts[1]);
   if (parts[0] === "quiz") return renderQuizStart(parts[1]);
   if (parts[0] === "admin") return renderAdminLogin();
-  if (parts[0] === "profile") return renderStudentLogin();
+  if (parts[0] === "profile") {
+    if (STUDENT_SESSION) return renderStudentProfile(STUDENT_SESSION);
+    return renderStudentLogin();
+  }
   return renderHome();
 }
 
@@ -238,32 +242,27 @@ async function renderQuizStart(slug) {
     \`;
     return;
   }
+  if (!STUDENT_SESSION) {
+    PENDING_QUIZ_SLUG = slug;
+    location.hash = "#/profile";
+    return;
+  }
+  const loggedInStudent = STUDENT_SESSION.student;
   app.innerHTML = \`
-    <a class="backlink" onclick="location.hash='#/course/bba251'">← Back to quizzes</a>
+    <a class="backlink" onclick="location.hash='#/profile'">← Back to my progress</a>
     <div class="panel">
       <h2>\${esc(quiz.title)}</h2>
       <p style="color:var(--muted); font-size:14px;">Time allowed: \${quiz.time_limit_minutes} minutes · 10 questions</p>
-      <label>Full Name *</label>
-      <input type="text" id="s-name" placeholder="e.g. Ama Serwaa" />
-      <label>Index Number</label>
-      <input type="text" id="s-index" placeholder="e.g. UG12345" />
-      <label>Programme</label>
-      <select id="s-prog">
-        <option value="HRM">HRM</option>
-        <option value="PSCM">PSCM</option>
-        <option value="Other">Other</option>
-      </select>
+      <p style="color:var(--muted); font-size:13.5px;">Starting as <strong>\${esc(loggedInStudent.full_name)}</strong> (\${esc(loggedInStudent.index_number)})</p>
       <div id="start-error"></div>
       <button id="start-btn">Start Quiz</button>
     </div>
   \`;
-  document.getElementById("start-btn").onclick = async () => {
-    const name = document.getElementById("s-name").value.trim();
-    if (!name) { document.getElementById("start-error").innerHTML = '<div class="error">Please enter your name.</div>'; return; }
+  document.getElementById("start-btn").onclick = () => {
     const student = {
-      name,
-      index: document.getElementById("s-index").value.trim(),
-      programme: document.getElementById("s-prog").value
+      name: loggedInStudent.full_name,
+      index: loggedInStudent.index_number,
+      programme: null
     };
     renderQuizTake(quiz, student);
   };
@@ -301,7 +300,7 @@ async function renderQuizTake(quiz, student) {
         <h2 style="margin:0;">\${esc(quiz.title)}</h2>
         <div class="quiz-timer" id="quiz-timer">⏱ --:--</div>
       </div>
-      <p style="color:var(--muted); font-size:13.5px;">Answering as <strong>\${esc(student.name)}</strong>\${student.index ? " · " + esc(student.index) : ""} (\${esc(student.programme)})</p>
+      <p style="color:var(--muted); font-size:13.5px;">Answering as <strong>\${esc(student.name)}</strong>\${student.index ? " · " + esc(student.index) : ""}\${student.programme ? " (" + esc(student.programme) + ")" : ""}</p>
       \${blocks}
       <div id="submit-error"></div>
       <button id="submit-btn">Submit Quiz</button>
@@ -372,6 +371,15 @@ async function renderQuizTake(quiz, student) {
 
     if (error) {
       document.getElementById("submit-error").innerHTML = \`<div class="error">Could not save your submission: \${esc(error.message)}. Your score is shown below, but please tell your lecturer.</div>\`;
+    } else if (STUDENT_SESSION) {
+      STUDENT_SESSION.submissions = STUDENT_SESSION.submissions || [];
+      STUDENT_SESSION.submissions.push({
+        quiz_id: quiz.id,
+        score,
+        max_score: maxScore,
+        effective_score: score,
+        effective_max: questions.length
+      });
     }
     renderResult(quiz, score, maxScore, review);
   }
@@ -407,8 +415,11 @@ function renderResult(quiz, score, maxScore, review) {
     </div>\`;
   }).join("");
 
+  const backHash = STUDENT_SESSION ? "#/profile" : "#/course/bba251";
+  const backLabel = STUDENT_SESSION ? "← Back to my progress" : "← Back to quizzes";
+
   app.innerHTML = \`
-    <a class="backlink" onclick="location.hash='#/course/bba251'">← Back to quizzes</a>
+    <a class="backlink" onclick="location.hash='\${backHash}'">\${backLabel}</a>
     <div class="panel">
       <div class="result-score">
         <div class="big">\${score} / \${maxScore}</div>
@@ -455,6 +466,12 @@ function renderStudentLogin() {
         return;
       }
       STUDENT_SESSION = data;
+      if (PENDING_QUIZ_SLUG) {
+        const slug = PENDING_QUIZ_SLUG;
+        PENDING_QUIZ_SLUG = null;
+        location.hash = "#/quiz/" + slug;
+        return;
+      }
       renderStudentProfile(data);
     } catch (e) {
       document.getElementById("stu-error").innerHTML = \`<div class="error">Network error: \${esc(e.message)}</div>\`;
@@ -527,24 +544,28 @@ function renderStudentProfile(data) {
 
   const rows = quizzes.map(q => {
     const sub = submissions.find(s => s.quiz_id === q.id);
-    let statusHtml, scoreHtml;
+    let statusHtml, scoreHtml, actionHtml;
     if (sub) {
       statusHtml = '<span class="qstatus open">Taken</span>';
       const effScore = sub.effective_score ?? sub.score;
       const effMax = sub.effective_max ?? sub.max_score;
       scoreHtml = \`\${effScore} / \${effMax}\`;
+      actionHtml = "—";
     } else if (q.is_open) {
       statusHtml = '<span class="qstatus to-open" style="background:#FFF6E5;color:var(--amber);">Not Yet Taken</span>';
       scoreHtml = "—";
+      actionHtml = \`<button class="take-quiz-btn" data-slug="\${q.slug}" style="margin:0;padding:6px 14px;font-size:12.5px;">Take Quiz</button>\`;
     } else {
       statusHtml = '<span class="qstatus locked">Locked</span>';
       scoreHtml = "—";
+      actionHtml = "—";
     }
     return \`<tr>
       <td>Day \${q.day_number}</td>
       <td>\${esc(q.title)}</td>
       <td>\${statusHtml}</td>
       <td>\${scoreHtml}</td>
+      <td>\${actionHtml}</td>
     </tr>\`;
   }).join("");
 
@@ -568,7 +589,10 @@ function renderStudentProfile(data) {
           <h2 style="margin:0 0 4px;">\${esc(student.full_name || "")}</h2>
           <p style="color:var(--muted); font-size:13.5px; margin:0;">\${esc(student.index_number || "")} · \${esc(student.course_code || "")}</p>
         </div>
-        \${student.is_ic ? '<span class="qstatus locked">IC — Incomplete</span>' : ""}
+        <div style="display:flex; align-items:center; gap:10px;">
+          \${student.is_ic ? '<span class="qstatus locked">IC — Incomplete</span>' : ""}
+          <button id="logout-btn" class="detail-toggle">Log Out</button>
+        </div>
       </div>
       <div class="stat-cards" style="margin-top:20px;">
         <div class="stat"><div class="n">\${takenSubs.length} / \${quizzes.length}</div><div class="l">Quizzes Taken</div></div>
@@ -577,13 +601,23 @@ function renderStudentProfile(data) {
       </div>
       <div class="section-title" style="margin-top:24px;">Daily Performance</div>
       <table>
-        <thead><tr><th>Day</th><th>Quiz</th><th>Status</th><th>Score</th></tr></thead>
-        <tbody>\${rows || '<tr><td colspan="4" style="text-align:center;color:var(--muted);">No quizzes found.</td></tr>'}</tbody>
+        <thead><tr><th>Day</th><th>Quiz</th><th>Status</th><th>Score</th><th>Action</th></tr></thead>
+        <tbody>\${rows || '<tr><td colspan="5" style="text-align:center;color:var(--muted);">No quizzes found.</td></tr>'}</tbody>
       </table>
       \${renderAssessmentTable("Forecast Grade", "Projects your grade assuming maximum marks on everything not yet completed or entered.", forecastA)}
       \${renderAssessmentTable("Official Assessment", "Based only on work completed and scores entered so far. Missing components currently count as zero.", officialA)}
     </div>
   \`;
+  document.querySelectorAll(".take-quiz-btn").forEach(btn => {
+    btn.onclick = () => { location.hash = "#/quiz/" + btn.dataset.slug; };
+  });
+  const logoutBtn = document.getElementById("logout-btn");
+  if (logoutBtn) {
+    logoutBtn.onclick = () => {
+      STUDENT_SESSION = null;
+      location.hash = "#/";
+    };
+  }
 }
 
 function renderAdminLogin() {
