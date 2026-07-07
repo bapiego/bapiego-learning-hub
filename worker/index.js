@@ -1,6 +1,7 @@
 const SUPABASE_URL = "https://qaqypbplpubkmwtekeva.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFhcXlwYnBscHVia213dGVrZXZhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMzNTI3MjMsImV4cCI6MjA5ODkyODcyM30.iDg1fpBi3_O8d_n8jP8cf_ZwgHyBNe6GkWZzLj7PvMA";
 const ADMIN_FUNCTION_URL = "https://qaqypbplpubkmwtekeva.supabase.co/functions/v1/admin";
+const STUDENT_FUNCTION_URL = "https://qaqypbplpubkmwtekeva.supabase.co/functions/v1/student";
 
 const HTML = `<!DOCTYPE html>
 <html lang="en">
@@ -56,9 +57,14 @@ const HTML = `<!DOCTYPE html>
   .panel { background: var(--white); border-radius: 14px; padding: 28px; box-shadow: 0 2px 10px rgba(20,30,60,0.08); border: 1px solid #E1E9EE; }
   .panel h2 { margin-top: 0; color: var(--navy); font-family: Georgia, serif; }
   label { display: block; font-size: 13px; font-weight: 600; color: var(--muted); margin: 14px 0 5px; }
-  input[type=text], input[type=password], select, textarea {
+  input[type=text], input[type=password], input[type=number], select, textarea {
     width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid #CBD8E0; font-size: 14px; font-family: inherit; background: #FBFDFE;
   }
+  .inline-score-input { width: 72px !important; display: inline-block; padding: 6px 8px !important; margin-right: 6px; }
+  .save-score-btn { margin: 0; padding: 7px 12px; font-size: 12.5px; }
+  .grade-input { width: 90px !important; display: inline-block; padding: 6px 8px !important; margin-right: 8px; }
+  .grade-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+  .dgraded { font-size: 11px; font-weight: 700; color: var(--good); text-transform: uppercase; letter-spacing: 0.5px; }
   textarea { min-height: 70px; resize: vertical; }
   button {
     background: var(--blue); color: var(--white); border: none; padding: 12px 22px; border-radius: 8px;
@@ -133,6 +139,7 @@ const HTML = `<!DOCTYPE html>
   <nav>
     <a onclick="location.hash='#/'">Home</a>
     <a onclick="location.hash='#/course/bba251'">BBA 251</a>
+    <a onclick="location.hash='#/profile'">Student Portal</a>
   </nav>
 </header>
 <main id="app"><div class="loading">Loading…</div></main>
@@ -141,11 +148,13 @@ const HTML = `<!DOCTYPE html>
 <script type="module">
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const supabase = createClient("${SUPABASE_URL}", "${SUPABASE_ANON_KEY}");
-const ADMIN_URL = "${ADMIN_FUNCTION_URL}";
+const supabase = createClient("\${SUPABASE_URL}", "\${SUPABASE_ANON_KEY}");
+const ADMIN_URL = "\${ADMIN_FUNCTION_URL}";
+const STUDENT_URL = "\${STUDENT_FUNCTION_URL}";
 const app = document.getElementById("app");
 let activeTimerInterval = null;
 let ADMIN_PW = null;
+let STUDENT_SESSION = null;
 
 const COURSES = [
   { code: "bba251", name: "BBA 251: Business Economics I (Micro)", programme: "HRM / PSCM · Level 200", desc: "Scarcity, markets, consumer & producer theory, costs & revenue, market structures, and national income." }
@@ -163,6 +172,7 @@ async function router() {
   if (parts[0] === "course") return renderCourse(parts[1]);
   if (parts[0] === "quiz") return renderQuizStart(parts[1]);
   if (parts[0] === "admin") return renderAdminLogin();
+  if (parts[0] === "profile") return renderStudentLogin();
   return renderHome();
 }
 
@@ -410,6 +420,110 @@ function renderResult(quiz, score, maxScore, review) {
   \`;
 }
 
+function renderStudentLogin() {
+  app.innerHTML = \`
+    <div class="panel" style="max-width:420px;margin:20px auto;">
+      <h2>Student Portal</h2>
+      <p style="color:var(--muted); font-size:13.5px;">Enter your official index number and the PIN given to you by your lecturer.</p>
+      <label>Index Number</label>
+      <input type="text" id="stu-index" placeholder="e.g. UG12345" />
+      <label>PIN</label>
+      <input type="password" id="stu-pin" placeholder="4-digit PIN" />
+      <div id="stu-error"></div>
+      <button id="stu-login-btn">View My Progress</button>
+    </div>
+  \`;
+  document.getElementById("stu-login-btn").onclick = async () => {
+    const btn = document.getElementById("stu-login-btn");
+    const indexNumber = document.getElementById("stu-index").value.trim();
+    const pin = document.getElementById("stu-pin").value.trim();
+    if (!indexNumber || !pin) {
+      document.getElementById("stu-error").innerHTML = '<div class="error">Please enter both your index number and PIN.</div>';
+      return;
+    }
+    btn.disabled = true; btn.textContent = "Checking…";
+    try {
+      const res = await fetch(STUDENT_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ index_number: indexNumber, pin })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        document.getElementById("stu-error").innerHTML = \`<div class="error">\${esc(data.error || "Login failed")}</div>\`;
+        btn.disabled = false; btn.textContent = "View My Progress";
+        return;
+      }
+      STUDENT_SESSION = data;
+      renderStudentProfile(data);
+    } catch (e) {
+      document.getElementById("stu-error").innerHTML = \`<div class="error">Network error: \${esc(e.message)}</div>\`;
+      btn.disabled = false; btn.textContent = "View My Progress";
+    }
+  };
+}
+
+function renderStudentProfile(data) {
+  const student = data.student || {};
+  const quizzes = data.quizzes || [];
+  const submissions = data.submissions || [];
+
+  const rows = quizzes.map(q => {
+    const sub = submissions.find(s => s.quiz_id === q.id);
+    let statusHtml, scoreHtml;
+    if (sub) {
+      statusHtml = '<span class="qstatus open">Taken</span>';
+      const effScore = sub.effective_score ?? sub.score;
+      const effMax = sub.effective_max ?? sub.max_score;
+      scoreHtml = \`\${effScore} / \${effMax}\`;
+    } else if (q.is_open) {
+      statusHtml = '<span class="qstatus to-open" style="background:#FFF6E5;color:var(--amber);">Not Yet Taken</span>';
+      scoreHtml = "—";
+    } else {
+      statusHtml = '<span class="qstatus locked">Locked</span>';
+      scoreHtml = "—";
+    }
+    return \`<tr>
+      <td>Day \${q.day_number}</td>
+      <td>\${esc(q.title)}</td>
+      <td>\${statusHtml}</td>
+      <td>\${scoreHtml}</td>
+    </tr>\`;
+  }).join("");
+
+  const takenSubs = submissions.filter(s => quizzes.some(q => q.id === s.quiz_id));
+  const quizAvgPct = takenSubs.length
+    ? Math.round((takenSubs.reduce((a, s) => {
+        const effScore = s.effective_score ?? s.score;
+        const effMax = s.effective_max ?? s.max_score;
+        return a + (effMax ? effScore / effMax : 0);
+      }, 0) / takenSubs.length) * 100)
+    : null;
+
+  app.innerHTML = \`
+    <a class="backlink" onclick="location.hash='#/'">← Back home</a>
+    <div class="panel">
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:10px;">
+        <div>
+          <h2 style="margin:0 0 4px;">\${esc(student.full_name || "")}</h2>
+          <p style="color:var(--muted); font-size:13.5px; margin:0;">\${esc(student.index_number || "")} · \${esc(student.course_code || "")}</p>
+        </div>
+        \${student.is_ic ? '<span class="qstatus locked">IC — Incomplete</span>' : ""}
+      </div>
+      <div class="stat-cards" style="margin-top:20px;">
+        <div class="stat"><div class="n">\${takenSubs.length} / \${quizzes.length}</div><div class="l">Quizzes Taken</div></div>
+        <div class="stat"><div class="n">\${quizAvgPct === null ? "—" : quizAvgPct + "%"}</div><div class="l">Quiz Average</div></div>
+      </div>
+      <div class="section-title" style="margin-top:24px;">Daily Performance</div>
+      <table>
+        <thead><tr><th>Day</th><th>Quiz</th><th>Status</th><th>Score</th></tr></thead>
+        <tbody>\${rows || '<tr><td colspan="4" style="text-align:center;color:var(--muted);">No quizzes found.</td></tr>'}</tbody>
+      </table>
+      <p style="color:var(--muted); font-size:12.5px; margin-top:18px;">Forecast grade and official assessment breakdown (Assignment / Quiz / Mid-Sem / Final) will appear here in a future update.</p>
+    </div>
+  \`;
+}
+
 function renderAdminLogin() {
   app.innerHTML = \`
     <div class="panel" style="max-width:420px;margin:20px auto;">
@@ -437,7 +551,7 @@ function renderAdminLogin() {
         return;
       }
       ADMIN_PW = pw;
-      renderAdminDashboard(data.submissions || [], data.quizzes || []);
+      renderAdminDashboard(data.submissions || [], data.quizzes || [], data.students || []);
     } catch (e) {
       document.getElementById("admin-error").innerHTML = \`<div class="error">Network error: \${esc(e.message)}</div>\`;
       btn.disabled = false; btn.textContent = "View Results";
@@ -459,15 +573,20 @@ function toCsv(rows) {
   return lines.join("\\n");
 }
 
-function renderAdminDashboard(rows, quizzes) {
+function renderAdminDashboard(rows, quizzes, students) {
   quizzes = quizzes || [];
+  students = students || [];
   const totalSubs = rows.length;
   const uniqueStudents = new Set(rows.map(r => r.student_name + "|" + (r.student_index || ""))).size;
   const avgPct = rows.length
-    ? Math.round((rows.reduce((a, r) => a + (r.max_score ? r.score / r.max_score : 0), 0) / rows.length) * 100)
+    ? Math.round((rows.reduce((a, r) => {
+        const effScore = r.effective_score ?? r.score;
+        const effMax = r.effective_max ?? r.max_score;
+        return a + (effMax ? effScore / effMax : 0);
+      }, 0) / rows.length) * 100)
     : 0;
 
-  const shortCount = rows.reduce((a, r) => a + (r.details ? r.details.filter(d => d.question_type === "short").length : 0), 0);
+  const shortCount = rows.reduce((a, r) => a + (r.details ? r.details.filter(d => d.question_type === "short" && d.needs_manual_review).length : 0), 0);
 
   const tableRows = rows.map((r, idx) => \`
     <tr>
@@ -475,7 +594,7 @@ function renderAdminDashboard(rows, quizzes) {
       <td>\${esc(r.student_index)}</td>
       <td>\${esc(r.programme)}</td>
       <td>\${esc(r.quizzes?.title || "—")}</td>
-      <td>\${r.score} / \${r.max_score}</td>
+      <td>\${r.effective_score ?? r.score} / \${r.effective_max ?? r.max_score}</td>
       <td>\${esc(new Date(r.submitted_at).toLocaleString())}</td>
       <td><button class="detail-toggle" data-idx="\${idx}">View Answers</button></td>
     </tr>
@@ -491,6 +610,26 @@ function renderAdminDashboard(rows, quizzes) {
     </tr>
   \`).join("");
 
+  const studentRows = students.map(s => \`
+    <tr>
+      <td>\${esc(s.index_number)}</td>
+      <td>\${esc(s.full_name)}</td>
+      <td><span class="qstatus \${s.is_ic ? "locked" : "open"}">\${s.is_ic ? "IC" : "Active"}</span></td>
+      <td>
+        <input type="number" class="inline-score-input exercise-score-input" data-student-id="\${s.id}" min="0" max="100" step="1" value="\${s.exercise_score ?? ""}" placeholder="0-100" />
+        <button class="save-score-btn save-exercise-btn" data-student-id="\${s.id}">Save</button>
+      </td>
+      <td>
+        <input type="number" class="inline-score-input final-exam-input" data-student-id="\${s.id}" min="0" max="100" step="1" value="\${s.final_exam_score ?? ""}" placeholder="0-100" />
+        <button class="save-score-btn save-final-exam-btn" data-student-id="\${s.id}">Save</button>
+      </td>
+      <td>
+        <button class="regen-pin-btn" data-student-id="\${s.id}" style="margin:0 6px 6px 0;padding:7px 12px;font-size:12.5px;">Regenerate PIN</button>
+        <button class="toggle-ic-btn" data-student-id="\${s.id}" data-is-ic="\${s.is_ic}" style="margin:0 0 6px 0;padding:7px 12px;font-size:12.5px;background:\${s.is_ic ? "var(--good)" : "var(--bad)"};">\${s.is_ic ? "Clear IC" : "Mark IC"}</button>
+      </td>
+    </tr>
+  \`).join("");
+
   app.innerHTML = \`
     <div class="manage-section">
       <h2 style="margin:0 0 14px;color:var(--navy);font-family:Georgia,serif;">Manage Quizzes — BBA 251</h2>
@@ -498,6 +637,21 @@ function renderAdminDashboard(rows, quizzes) {
       <table>
         <thead><tr><th>Day</th><th>Quiz</th><th>Status</th><th>Action</th></tr></thead>
         <tbody>\${quizRows || '<tr><td colspan="4" style="text-align:center;color:var(--muted);">No quizzes found.</td></tr>'}</tbody>
+      </table>
+    </div>
+    <div class="manage-section">
+      <h2 style="margin:0 0 14px;color:var(--navy);font-family:Georgia,serif;">Manage Students — BBA 251</h2>
+      <p style="color:var(--muted);font-size:13.5px;margin:0 0 14px;">Add a student to auto-generate their login PIN. They'll log in at the Student Portal using their index number + PIN.</p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px;">
+        <div style="flex:1;min-width:160px;"><label style="margin-top:0;">Full Name</label><input type="text" id="new-student-name" /></div>
+        <div style="flex:1;min-width:140px;"><label style="margin-top:0;">Index Number</label><input type="text" id="new-student-index" /></div>
+        <button id="add-student-btn" style="margin:0;">Add Student</button>
+      </div>
+      <div id="add-student-error"></div>
+      <p style="color:var(--muted);font-size:12.5px;margin:0 0 10px;">Exercise Score and Final Exam are entered out of 100 and count toward the official grade breakdown.</p>
+      <table>
+        <thead><tr><th>Index No.</th><th>Name</th><th>Status</th><th>Exercise Score</th><th>Final Exam</th><th>Actions</th></tr></thead>
+        <tbody>\${studentRows || '<tr><td colspan="6" style="text-align:center;color:var(--muted);">No students added yet.</td></tr>'}</tbody>
       </table>
     </div>
     <div class="toolbar">
@@ -537,7 +691,155 @@ function renderAdminDashboard(rows, quizzes) {
         });
         const data = await res.json();
         if (!res.ok) { alert(data.error || "Could not update quiz."); btn.disabled = false; return; }
-        renderAdminDashboard(data.submissions || [], data.quizzes || []);
+        renderAdminDashboard(data.submissions || [], data.quizzes || [], data.students || []);
+      } catch (e) {
+        alert("Network error: " + e.message);
+        btn.disabled = false;
+      }
+    };
+  });
+  document.getElementById("add-student-btn").onclick = async () => {
+    const btn = document.getElementById("add-student-btn");
+    const fullName = document.getElementById("new-student-name").value.trim();
+    const indexNumber = document.getElementById("new-student-index").value.trim();
+    if (!fullName || !indexNumber) {
+      document.getElementById("add-student-error").innerHTML = '<div class="error">Please enter both a name and an index number.</div>';
+      return;
+    }
+    btn.disabled = true; btn.textContent = "Adding…";
+    try {
+      const res = await fetch(ADMIN_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: ADMIN_PW, action: "add_student", full_name: fullName, index_number: indexNumber })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        document.getElementById("add-student-error").innerHTML = \`<div class="error">\${esc(data.error || "Could not add student.")}</div>\`;
+        btn.disabled = false; btn.textContent = "Add Student";
+        return;
+      }
+      renderAdminDashboard(data.submissions || [], data.quizzes || [], data.students || []);
+      if (data.last_action && data.last_action.pin) {
+        alert(\`Student added: \${data.last_action.full_name} (\${data.last_action.index_number})\\nPIN: \${data.last_action.pin}\\n\\nShare this PIN with the student — it will not be shown again.\`);
+      }
+    } catch (e) {
+      document.getElementById("add-student-error").innerHTML = \`<div class="error">Network error: \${esc(e.message)}</div>\`;
+      btn.disabled = false; btn.textContent = "Add Student";
+    }
+  };
+  document.querySelectorAll(".save-exercise-btn").forEach(btn => {
+    btn.onclick = async () => {
+      const studentId = btn.dataset.studentId;
+      const input = document.querySelector(\`.exercise-score-input[data-student-id="\${studentId}"]\`);
+      const raw = input.value.trim();
+      if (raw !== "" && (isNaN(Number(raw)) || Number(raw) < 0 || Number(raw) > 100)) {
+        alert("Exercise score must be a number between 0 and 100.");
+        return;
+      }
+      btn.disabled = true; btn.textContent = "…";
+      try {
+        const res = await fetch(ADMIN_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password: ADMIN_PW, action: "update_exercise_score", student_id: studentId, exercise_score: raw === "" ? null : Number(raw) })
+        });
+        const data = await res.json();
+        if (!res.ok) { alert(data.error || "Could not save exercise score."); btn.disabled = false; btn.textContent = "Save"; return; }
+        renderAdminDashboard(data.submissions || [], data.quizzes || [], data.students || []);
+      } catch (e) {
+        alert("Network error: " + e.message);
+        btn.disabled = false; btn.textContent = "Save";
+      }
+    };
+  });
+  document.querySelectorAll(".save-final-exam-btn").forEach(btn => {
+    btn.onclick = async () => {
+      const studentId = btn.dataset.studentId;
+      const input = document.querySelector(\`.final-exam-input[data-student-id="\${studentId}"]\`);
+      const raw = input.value.trim();
+      if (raw !== "" && (isNaN(Number(raw)) || Number(raw) < 0 || Number(raw) > 100)) {
+        alert("Final exam score must be a number between 0 and 100.");
+        return;
+      }
+      btn.disabled = true; btn.textContent = "…";
+      try {
+        const res = await fetch(ADMIN_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password: ADMIN_PW, action: "update_final_exam_score", student_id: studentId, final_exam_score: raw === "" ? null : Number(raw) })
+        });
+        const data = await res.json();
+        if (!res.ok) { alert(data.error || "Could not save final exam score."); btn.disabled = false; btn.textContent = "Save"; return; }
+        renderAdminDashboard(data.submissions || [], data.quizzes || [], data.students || []);
+      } catch (e) {
+        alert("Network error: " + e.message);
+        btn.disabled = false; btn.textContent = "Save";
+      }
+    };
+  });
+  document.querySelectorAll(".grade-short-btn").forEach(btn => {
+    btn.onclick = async () => {
+      const submissionId = btn.dataset.submissionId;
+      const questionId = btn.dataset.questionId;
+      const input = document.querySelector(\`.grade-input[data-submission-id="\${submissionId}"][data-question-id="\${questionId}"]\`);
+      const raw = input.value.trim();
+      if (raw === "" || isNaN(Number(raw)) || Number(raw) < 0 || Number(raw) > 1) {
+        alert("Score must be a number between 0 and 1 (e.g. 0, 0.5, or 1).");
+        return;
+      }
+      btn.disabled = true; btn.textContent = "…";
+      try {
+        const res = await fetch(ADMIN_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password: ADMIN_PW, action: "grade_short_answer", submission_id: submissionId, question_id: questionId, score: Number(raw) })
+        });
+        const data = await res.json();
+        if (!res.ok) { alert(data.error || "Could not save score."); btn.disabled = false; btn.textContent = "Save Score"; return; }
+        renderAdminDashboard(data.submissions || [], data.quizzes || [], data.students || []);
+      } catch (e) {
+        alert("Network error: " + e.message);
+        btn.disabled = false; btn.textContent = "Save Score";
+      }
+    };
+  });
+  document.querySelectorAll(".regen-pin-btn").forEach(btn => {
+    btn.onclick = async () => {
+      const studentId = btn.dataset.studentId;
+      btn.disabled = true; btn.textContent = "…";
+      try {
+        const res = await fetch(ADMIN_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password: ADMIN_PW, action: "regenerate_pin", student_id: studentId })
+        });
+        const data = await res.json();
+        if (!res.ok) { alert(data.error || "Could not regenerate PIN."); btn.disabled = false; return; }
+        if (data.last_action && data.last_action.pin) {
+          alert(\`New PIN: \${data.last_action.pin}\\n\\nShare this PIN with the student — it will not be shown again.\`);
+        }
+        renderAdminDashboard(data.submissions || [], data.quizzes || [], data.students || []);
+      } catch (e) {
+        alert("Network error: " + e.message);
+        btn.disabled = false;
+      }
+    };
+  });
+  document.querySelectorAll(".toggle-ic-btn").forEach(btn => {
+    btn.onclick = async () => {
+      const studentId = btn.dataset.studentId;
+      const newIsIc = btn.dataset.isIc !== "true";
+      btn.disabled = true; btn.textContent = "…";
+      try {
+        const res = await fetch(ADMIN_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password: ADMIN_PW, action: "toggle_ic", student_id: studentId, is_ic: newIsIc })
+        });
+        const data = await res.json();
+        if (!res.ok) { alert(data.error || "Could not update student."); btn.disabled = false; return; }
+        renderAdminDashboard(data.submissions || [], data.quizzes || [], data.students || []);
       } catch (e) {
         alert("Network error: " + e.message);
         btn.disabled = false;
@@ -560,11 +862,16 @@ function renderSubmissionDetails(r) {
   }
   return details.map(d => {
     if (d.question_type === "short") {
+      const graded = d.manual_score !== null && d.manual_score !== undefined;
       return \`<div class="detail-q">
-        <span class="dreview">Needs manual review</span>
+        \${graded ? \`<span class="dgraded">Graded: \${d.manual_score} / 1</span>\` : '<span class="dreview">Needs manual review</span>'}
         <div class="dqt">\${d.position}. \${esc(d.question_text)}</div>
         <div class="dgiven"><strong>Student answer:</strong> \${esc(d.given || "(blank)")}</div>
         <div class="dmodel"><strong>Model answer:</strong> \${esc(d.model_answer || "—")}</div>
+        <div class="grade-row">
+          <input type="number" class="grade-input" data-submission-id="\${r.id}" data-question-id="\${d.question_id}" min="0" max="1" step="0.5" value="\${graded ? d.manual_score : ""}" placeholder="0 – 1" />
+          <button class="save-score-btn grade-short-btn" data-submission-id="\${r.id}" data-question-id="\${d.question_id}">\${graded ? "Update Score" : "Save Score"}</button>
+        </div>
       </div>\`;
     }
     const optText = (val) => {

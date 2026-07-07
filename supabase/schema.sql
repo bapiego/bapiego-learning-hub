@@ -51,4 +51,104 @@ create policy "public read quizzes" on quizzes
 
 -- Question content is only readable once the parent quiz has been switched
 -- to is_open = true by the lecturer. This is enforced at the database level
--- (not just hidden in the UI) so 
+-- (not just hidden in the UI) so a direct REST API call with the public
+-- anon key cannot fetch a locked quiz's questions before it's due.
+create policy "read questions of open quizzes" on questions
+  for select using (
+    exists (
+      select 1 from quizzes q
+      where q.id = questions.quiz_id and q.is_open = true
+    )
+  );
+
+-- Anyone can submit a quiz attempt, but cannot read submissions directly
+-- (the admin dashboard reads submissions via the service-role "admin" edge
+-- function instead, which is gated by ADMIN_PASSWORD).
+create policy "public insert submissions" on submissions
+  for insert with check (true);
+
+-- Student roster: index number + PIN login (Phase 1)
+create table if not exists students (
+  id uuid primary key default gen_random_uuid(),
+  full_name text not null,
+  index_number text not null,
+  course_code text not null default 'BBA251',
+  pin_hash text not null,
+  is_ic boolean not null default false,
+  created_at timestamptz not null default now(),
+  unique (course_code, index_number)
+);
+
+-- No RLS policies are defined for this table on purpose: this denies all
+-- anon/authenticated access by default. Only the service-role key (used
+-- inside the "admin" and "student" edge functions) can read/write it.
+alter table students enable row level security;
+
+-- Verifies an index number + PIN pair and returns the matching student's id
+-- (or null), without ever exposing pin_hash to the caller.
+create or replace function verify_student_pin(p_course_code text, p_index_number text, p_pin text)
+returns uuid
+language sql
+security definer
+set search_path = public, extensions
+as $$
+  select id from students
+  where course_code = p_course_code
+    and index_number = p_index_number
+    and pin_hash = crypt(p_pin, pin_hash)
+  limit 1;
+$$;
+
+-- Admin-only helper: adds a student and auto-generates a 4-digit PIN.
+create or replace function admin_add_student(p_course_code text, p_full_name text, p_index_number text)
+returns table (id uuid, full_name text, index_number text, pin text)
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  new_pin text;
+  new_id uuid;
+begin
+  new_pin := lpad(floor(random() * 10000)::text, 4, '0');
+  insert into students (course_code, full_name, index_number, pin_hash)
+  values (p_course_code, p_full_name, p_index_number, crypt(new_pin, gen_salt('bf')))
+  returning students.id into new_id;
+
+  return query select new_id, p_full_name, p_index_number, new_pin;
+end;
+$$;
+
+-- Admin-only helper: regenerates a student's PIN.
+create or replace function admin_regenerate_pin(p_student_id uuid)
+returns table (id uuid, pin text)
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  new_pin text;
+begin
+  new_pin := lpad(floor(random() * 10000)::text, 4, '0');
+  update students set pin_hash = crypt(new_pin, gen_salt('bf'))
+  where students.id = p_student_id;
+
+  return query select p_student_id, new_pin;
+end;
+$$;
+
+-- Phase 2: exercise/participation score + final exam manual entry on students,
+-- and per-question manual scores for short-answer grading on submissions.
+
+alter table students
+  add column if not exists exercise_score numeric,
+  add column if not exists final_exam_score numeric;
+
+alter table students
+  add constraint students_exercise_score_range check (exercise_score is null or (exercise_score >= 0 and exercise_score <= 100));
+
+alter table students
+  add constraint students_final_exam_score_range check (final_exam_score is null or (final_exam_score >= 0 and final_exam_score <= 100));
+
+alter table submissions
+  add column if not exists manual_scores jsonb not null default '{}'::jsonb;
