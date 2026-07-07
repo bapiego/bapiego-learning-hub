@@ -100,8 +100,16 @@ as $$
 $$;
 
 -- Admin-only helper: adds a student and auto-generates a 4-digit PIN.
-create or replace function admin_add_student(p_course_code text, p_full_name text, p_index_number text)
-returns table (id uuid, full_name text, index_number text, pin text)
+-- (Phase 4: extended to also capture phone/programme/email at creation time.)
+create or replace function admin_add_student(
+  p_course_code text,
+  p_full_name text,
+  p_index_number text,
+  p_phone text default null,
+  p_programme text default null,
+  p_email text default null
+)
+returns table (id uuid, full_name text, index_number text, pin text, phone text)
 language plpgsql
 security definer
 set search_path = public, extensions
@@ -111,11 +119,11 @@ declare
   new_id uuid;
 begin
   new_pin := lpad(floor(random() * 10000)::text, 4, '0');
-  insert into students (course_code, full_name, index_number, pin_hash)
-  values (p_course_code, p_full_name, p_index_number, crypt(new_pin, gen_salt('bf')))
+  insert into students (course_code, full_name, index_number, pin_hash, phone, programme, email)
+  values (p_course_code, p_full_name, p_index_number, crypt(new_pin, gen_salt('bf')), p_phone, p_programme, p_email)
   returning students.id into new_id;
 
-  return query select new_id, p_full_name, p_index_number, new_pin;
+  return query select new_id, p_full_name, p_index_number, new_pin, p_phone;
 end;
 $$;
 
@@ -152,3 +160,25 @@ alter table students
 
 alter table submissions
   add column if not exists manual_scores jsonb not null default '{}'::jsonb;
+
+-- Phase 4: student contact details for SMS notifications, plus a log of
+-- SMS send attempts for troubleshooting delivery issues.
+
+alter table students
+  add column if not exists phone text,
+  add column if not exists programme text,
+  add column if not exists email text;
+
+create table if not exists sms_log (
+  id uuid primary key default gen_random_uuid(),
+  student_id uuid references students(id) on delete set null,
+  phone text not null,
+  message text not null,
+  trigger text not null, -- e.g. 'pin_issued', 'quiz_open', 'missed_quiz', 'final_grade', 'broadcast'
+  success boolean not null,
+  response_snippet text,
+  created_at timestamptz not null default now()
+);
+
+alter table sms_log enable row level security;
+-- No policies: only the service-role key (used inside edge functions) can read/write.

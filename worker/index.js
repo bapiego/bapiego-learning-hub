@@ -719,6 +719,17 @@ function renderAdminDashboard(rows, quizzes, students) {
         <input type="number" class="inline-score-input final-exam-input" data-student-id="\${s.id}" min="0" max="100" step="1" value="\${s.final_exam_score ?? ""}" placeholder="0-100" />
         <button class="save-score-btn save-final-exam-btn" data-student-id="\${s.id}">Save</button>
       </td>
+      <td style="min-width:200px;">
+        <input type="text" class="inline-score-input contact-phone-input" data-student-id="\${s.id}" value="\${esc(s.phone ?? "")}" placeholder="Phone" style="width:100%!important;margin-bottom:4px;" />
+        <select class="inline-score-input contact-programme-input" data-student-id="\${s.id}" style="width:100%!important;margin-bottom:4px;">
+          <option value="" \${!s.programme ? "selected" : ""}>—</option>
+          <option value="HRM" \${s.programme === "HRM" ? "selected" : ""}>HRM</option>
+          <option value="PSCM" \${s.programme === "PSCM" ? "selected" : ""}>PSCM</option>
+          <option value="Other" \${s.programme === "Other" ? "selected" : ""}>Other</option>
+        </select>
+        <input type="text" class="inline-score-input contact-email-input" data-student-id="\${s.id}" value="\${esc(s.email ?? "")}" placeholder="Email" style="width:100%!important;margin-bottom:4px;" />
+        <button class="save-score-btn save-contact-btn" data-student-id="\${s.id}">Save Contact</button>
+      </td>
       <td>
         <button class="regen-pin-btn" data-student-id="\${s.id}" style="margin:0 6px 6px 0;padding:7px 12px;font-size:12.5px;">Regenerate PIN</button>
         <button class="toggle-ic-btn" data-student-id="\${s.id}" data-is-ic="\${s.is_ic}" style="margin:0 0 6px 0;padding:7px 12px;font-size:12.5px;background:\${s.is_ic ? "var(--good)" : "var(--bad)"};">\${s.is_ic ? "Clear IC" : "Mark IC"}</button>
@@ -741,14 +752,37 @@ function renderAdminDashboard(rows, quizzes, students) {
       <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px;">
         <div style="flex:1;min-width:160px;"><label style="margin-top:0;">Full Name</label><input type="text" id="new-student-name" /></div>
         <div style="flex:1;min-width:140px;"><label style="margin-top:0;">Index Number</label><input type="text" id="new-student-index" /></div>
+        <div style="flex:1;min-width:140px;"><label style="margin-top:0;">Phone</label><input type="text" id="new-student-phone" placeholder="e.g. 0246314915" /></div>
+        <div style="flex:1;min-width:120px;"><label style="margin-top:0;">Programme</label>
+          <select id="new-student-programme">
+            <option value="">—</option>
+            <option value="HRM">HRM</option>
+            <option value="PSCM">PSCM</option>
+            <option value="Other">Other</option>
+          </select>
+        </div>
+        <div style="flex:1;min-width:160px;"><label style="margin-top:0;">Email</label><input type="text" id="new-student-email" /></div>
         <button id="add-student-btn" style="margin:0;">Add Student</button>
       </div>
       <div id="add-student-error"></div>
-      <p style="color:var(--muted);font-size:12.5px;margin:0 0 10px;">Exercise Score and Final Exam are entered out of 100 and count toward the official grade breakdown.</p>
+      <p style="color:var(--muted);font-size:12.5px;margin:0 0 10px;">Exercise Score and Final Exam are entered out of 100 and count toward the official grade breakdown. A phone number is required for a student to receive SMS notifications (PIN, quiz alerts, grades).</p>
       <table>
-        <thead><tr><th>Index No.</th><th>Name</th><th>Status</th><th>Exercise Score</th><th>Final Exam</th><th>Actions</th></tr></thead>
-        <tbody>\${studentRows || '<tr><td colspan="6" style="text-align:center;color:var(--muted);">No students added yet.</td></tr>'}</tbody>
+        <thead><tr><th>Index No.</th><th>Name</th><th>Status</th><th>Exercise Score</th><th>Final Exam</th><th>Contact</th><th>Actions</th></tr></thead>
+        <tbody>\${studentRows || '<tr><td colspan="7" style="text-align:center;color:var(--muted);">No students added yet.</td></tr>'}</tbody>
       </table>
+    </div>
+    <div class="manage-section">
+      <h2 style="margin:0 0 14px;color:var(--navy);font-family:Georgia,serif;">SMS Broadcast — BBA 251</h2>
+      <p style="color:var(--muted);font-size:13.5px;margin:0 0 14px;">Send a text message to all students on the roster, or to one specific student. Only students with a phone number on file will receive it.</p>
+      <label style="margin-top:0;">Send To</label>
+      <select id="broadcast-target">
+        <option value="">All Students</option>
+        \${students.map(s => \`<option value="\${s.id}">\${esc(s.full_name)} (\${esc(s.index_number)})</option>\`).join("")}
+      </select>
+      <label>Message</label>
+      <textarea id="broadcast-message" placeholder="Type your message…"></textarea>
+      <div id="broadcast-error"></div>
+      <button id="broadcast-btn">Send SMS</button>
     </div>
     <div class="toolbar">
       <h2 style="margin:0;color:var(--navy);font-family:Georgia,serif;">Student Results — BBA 251</h2>
@@ -798,6 +832,9 @@ function renderAdminDashboard(rows, quizzes, students) {
     const btn = document.getElementById("add-student-btn");
     const fullName = document.getElementById("new-student-name").value.trim();
     const indexNumber = document.getElementById("new-student-index").value.trim();
+    const phone = document.getElementById("new-student-phone").value.trim();
+    const programme = document.getElementById("new-student-programme").value;
+    const email = document.getElementById("new-student-email").value.trim();
     if (!fullName || !indexNumber) {
       document.getElementById("add-student-error").innerHTML = '<div class="error">Please enter both a name and an index number.</div>';
       return;
@@ -807,7 +844,10 @@ function renderAdminDashboard(rows, quizzes, students) {
       const res = await fetch(ADMIN_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password: ADMIN_PW, action: "add_student", full_name: fullName, index_number: indexNumber })
+        body: JSON.stringify({
+          password: ADMIN_PW, action: "add_student", full_name: fullName, index_number: indexNumber,
+          phone: phone || null, programme: programme || null, email: email || null
+        })
       });
       const data = await res.json();
       if (!res.ok) {
@@ -817,7 +857,8 @@ function renderAdminDashboard(rows, quizzes, students) {
       }
       renderAdminDashboard(data.submissions || [], data.quizzes || [], data.students || []);
       if (data.last_action && data.last_action.pin) {
-        alert(\`Student added: \${data.last_action.full_name} (\${data.last_action.index_number})\\nPIN: \${data.last_action.pin}\\n\\nShare this PIN with the student — it will not be shown again.\`);
+        const smsNote = data.last_action.phone ? "\\n\\nAn SMS with this PIN has also been sent to " + data.last_action.phone + "." : "\\n\\nNo phone number was provided, so no SMS was sent.";
+        alert(\`Student added: \${data.last_action.full_name} (\${data.last_action.index_number})\\nPIN: \${data.last_action.pin}\${smsNote}\`);
       }
     } catch (e) {
       document.getElementById("add-student-error").innerHTML = \`<div class="error">Network error: \${esc(e.message)}</div>\`;
@@ -942,6 +983,61 @@ function renderAdminDashboard(rows, quizzes, students) {
       }
     };
   });
+  document.querySelectorAll(".save-contact-btn").forEach(btn => {
+    btn.onclick = async () => {
+      const studentId = btn.dataset.studentId;
+      const phone = document.querySelector(\`.contact-phone-input[data-student-id="\${studentId}"]\`).value.trim();
+      const programme = document.querySelector(\`.contact-programme-input[data-student-id="\${studentId}"]\`).value;
+      const email = document.querySelector(\`.contact-email-input[data-student-id="\${studentId}"]\`).value.trim();
+      btn.disabled = true; btn.textContent = "…";
+      try {
+        const res = await fetch(ADMIN_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            password: ADMIN_PW, action: "update_student_contact", student_id: studentId,
+            phone: phone || null, programme: programme || null, email: email || null
+          })
+        });
+        const data = await res.json();
+        if (!res.ok) { alert(data.error || "Could not save contact info."); btn.disabled = false; btn.textContent = "Save Contact"; return; }
+        renderAdminDashboard(data.submissions || [], data.quizzes || [], data.students || []);
+      } catch (e) {
+        alert("Network error: " + e.message);
+        btn.disabled = false; btn.textContent = "Save Contact";
+      }
+    };
+  });
+  document.getElementById("broadcast-btn").onclick = async () => {
+    const btn = document.getElementById("broadcast-btn");
+    const studentId = document.getElementById("broadcast-target").value;
+    const message = document.getElementById("broadcast-message").value.trim();
+    if (!message) {
+      document.getElementById("broadcast-error").innerHTML = '<div class="error">Please type a message.</div>';
+      return;
+    }
+    btn.disabled = true; btn.textContent = "Sending…";
+    try {
+      const res = await fetch(ADMIN_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: ADMIN_PW, action: "send_broadcast", message, student_id: studentId || null })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        document.getElementById("broadcast-error").innerHTML = \`<div class="error">\${esc(data.error || "Could not send broadcast.")}</div>\`;
+        btn.disabled = false; btn.textContent = "Send SMS";
+        return;
+      }
+      renderAdminDashboard(data.submissions || [], data.quizzes || [], data.students || []);
+      if (data.last_action) {
+        alert(\`Sent to \${data.last_action.sent} of \${data.last_action.total} student(s). \${data.last_action.skipped} skipped (no phone on file or delivery failed).\`);
+      }
+    } catch (e) {
+      document.getElementById("broadcast-error").innerHTML = \`<div class="error">Network error: \${esc(e.message)}</div>\`;
+      btn.disabled = false; btn.textContent = "Send SMS";
+    }
+  };
   document.getElementById("csv-btn").onclick = () => {
     const blob = new Blob([toCsv(rows)], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
