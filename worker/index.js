@@ -148,9 +148,9 @@ const HTML = `<!DOCTYPE html>
 <script type="module">
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const supabase = createClient("\${SUPABASE_URL}", "\${SUPABASE_ANON_KEY}");
-const ADMIN_URL = "\${ADMIN_FUNCTION_URL}";
-const STUDENT_URL = "\${STUDENT_FUNCTION_URL}";
+const supabase = createClient("${SUPABASE_URL}", "${SUPABASE_ANON_KEY}");
+const ADMIN_URL = "${ADMIN_FUNCTION_URL}";
+const STUDENT_URL = "${STUDENT_FUNCTION_URL}";
 const app = document.getElementById("app");
 let activeTimerInterval = null;
 let ADMIN_PW = null;
