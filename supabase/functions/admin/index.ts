@@ -245,6 +245,45 @@ async function updateFinalExamScore(studentId: string, score: number | null) {
   }
 }
 
+async function updateStudentIdentity(studentId: string, fullName: string, indexNumber: string) {
+  const existing = await fetchStudentById(studentId);
+  if (!existing) throw new Error("Student not found");
+  const oldIndex: string = existing.index_number;
+
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/students?id=eq.${studentId}`, {
+    method: "PATCH",
+    headers: { ...SERVICE_HEADERS, "Content-Type": "application/json", Prefer: "return=minimal" },
+    body: JSON.stringify({ full_name: fullName, index_number: indexNumber }),
+  });
+  if (!res.ok) {
+    const errText = await res.text();
+    if (res.status === 409 || errText.includes("23505") || errText.toLowerCase().includes("duplicate")) {
+      throw new Error("That index number is already in use by another student.");
+    }
+    throw new Error(`Failed to update student (${res.status})`);
+  }
+
+  // Best-effort: re-link any submissions recorded under the old (incorrect)
+  // index number / name so quiz history stays connected to this student's
+  // corrected profile. Never lets a re-link failure break the main update.
+  try {
+    if (oldIndex && oldIndex.trim()) {
+      const changed: Record<string, unknown> = {};
+      if (oldIndex.trim().toLowerCase() !== indexNumber.trim().toLowerCase()) changed.student_index = indexNumber;
+      if (fullName !== existing.full_name) changed.student_name = fullName;
+      if (Object.keys(changed).length) {
+        await fetch(`${SUPABASE_URL}/rest/v1/submissions?student_index=ilike.${encodeURIComponent(oldIndex.trim())}`, {
+          method: "PATCH",
+          headers: { ...SERVICE_HEADERS, "Content-Type": "application/json", Prefer: "return=minimal" },
+          body: JSON.stringify(changed),
+        });
+      }
+    }
+  } catch {
+    // Ignore — the student's own record was already corrected successfully.
+  }
+}
+
 async function updateStudentContact(studentId: string, phone: string | null, programme: string | null, email: string | null) {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/students?id=eq.${studentId}`, {
     method: "PATCH",
@@ -449,6 +488,13 @@ Deno.serve(async (req) => {
         });
       }
       await updateFinalExamScore(body.student_id, score ?? null);
+    } else if (body.action === "update_student_identity") {
+      if (!body.student_id || !body.full_name || !body.full_name.trim() || !body.index_number || !body.index_number.trim()) {
+        return new Response(JSON.stringify({ error: "student_id, full_name and index_number are required" }), {
+          status: 400, headers: { "Content-Type": "application/json", ...CORS }
+        });
+      }
+      await updateStudentIdentity(body.student_id, body.full_name.trim(), body.index_number.trim());
     } else if (body.action === "update_student_contact") {
       if (!body.student_id) {
         return new Response(JSON.stringify({ error: "student_id is required" }), {

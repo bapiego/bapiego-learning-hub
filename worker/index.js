@@ -708,8 +708,12 @@ function renderAdminDashboard(rows, quizzes, students) {
 
   const studentRows = students.map(s => \`
     <tr>
-      <td>\${esc(s.index_number)}</td>
-      <td>\${esc(s.full_name)}</td>
+      <td style="min-width:150px;">
+        <input type="text" class="inline-score-input identity-name-input" data-student-id="\${s.id}" value="\${esc(s.full_name)}" placeholder="Full name" style="width:100%!important;margin-bottom:4px;" />
+        <input type="text" class="inline-score-input identity-index-input" data-student-id="\${s.id}" value="\${esc(s.index_number)}" placeholder="Index number" style="width:100%!important;margin-bottom:4px;" />
+        <button class="save-score-btn save-identity-btn" data-student-id="\${s.id}">Save Name/ID</button>
+        <div class="identity-error" data-student-id="\${s.id}" style="font-size:11.5px;color:var(--bad);margin-top:3px;"></div>
+      </td>
       <td><span class="qstatus \${s.is_ic ? "locked" : "open"}">\${s.is_ic ? "IC" : "Active"}</span></td>
       <td>
         <input type="number" class="inline-score-input exercise-score-input" data-student-id="\${s.id}" min="0" max="100" step="1" value="\${s.exercise_score ?? ""}" placeholder="0-100" />
@@ -767,8 +771,8 @@ function renderAdminDashboard(rows, quizzes, students) {
       <div id="add-student-error"></div>
       <p style="color:var(--muted);font-size:12.5px;margin:0 0 10px;">Exercise Score and Final Exam are entered out of 100 and count toward the official grade breakdown. A phone number is required for a student to receive SMS notifications (PIN, quiz alerts, grades).</p>
       <table>
-        <thead><tr><th>Index No.</th><th>Name</th><th>Status</th><th>Exercise Score</th><th>Final Exam</th><th>Contact</th><th>Actions</th></tr></thead>
-        <tbody>\${studentRows || '<tr><td colspan="7" style="text-align:center;color:var(--muted);">No students added yet.</td></tr>'}</tbody>
+        <thead><tr><th>Name / Index No.</th><th>Status</th><th>Exercise Score</th><th>Final Exam</th><th>Contact</th><th>Actions</th></tr></thead>
+        <tbody>\${studentRows || '<tr><td colspan="6" style="text-align:center;color:var(--muted);">No students added yet.</td></tr>'}</tbody>
       </table>
     </div>
     <div class="manage-section">
@@ -980,6 +984,40 @@ function renderAdminDashboard(rows, quizzes, students) {
       } catch (e) {
         alert("Network error: " + e.message);
         btn.disabled = false;
+      }
+    };
+  });
+  document.querySelectorAll(".save-identity-btn").forEach(btn => {
+    btn.onclick = async () => {
+      const studentId = btn.dataset.studentId;
+      const errorEl = document.querySelector(\`.identity-error[data-student-id="\${studentId}"]\`);
+      const fullName = document.querySelector(\`.identity-name-input[data-student-id="\${studentId}"]\`).value.trim();
+      const indexNumber = document.querySelector(\`.identity-index-input[data-student-id="\${studentId}"]\`).value.trim();
+      if (errorEl) errorEl.textContent = "";
+      if (!fullName || !indexNumber) {
+        if (errorEl) errorEl.textContent = "Name and index number are both required.";
+        return;
+      }
+      btn.disabled = true; btn.textContent = "…";
+      try {
+        const res = await fetch(ADMIN_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            password: ADMIN_PW, action: "update_student_identity", student_id: studentId,
+            full_name: fullName, index_number: indexNumber
+          })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          if (errorEl) errorEl.textContent = data.error || "Could not save changes.";
+          btn.disabled = false; btn.textContent = "Save Name/ID";
+          return;
+        }
+        renderAdminDashboard(data.submissions || [], data.quizzes || [], data.students || []);
+      } catch (e) {
+        if (errorEl) errorEl.textContent = "Network error: " + e.message;
+        btn.disabled = false; btn.textContent = "Save Name/ID";
       }
     };
   });
