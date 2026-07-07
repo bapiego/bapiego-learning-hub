@@ -112,6 +112,16 @@ const HTML = `<!DOCTYPE html>
   th, td { padding:10px 12px; text-align:left; border-bottom:1px solid #EAF0F3; }
   th { background:var(--navy); color:#fff; font-size:12px; text-transform:uppercase; letter-spacing:0.5px; }
   a.dl { color:#fff; background:var(--teal); padding:9px 16px; border-radius:8px; text-decoration:none; font-size:13.5px; font-weight:600; }
+  .badge.locked { background:#FCEEED; color: var(--bad); }
+  .card.locked-card { opacity: 0.7; }
+  .card.locked-card:hover { transform: none; box-shadow: 0 2px 10px rgba(20,30,60,0.08); }
+  .qstatus { display:inline-block; font-size:11px; font-weight:700; padding:3px 9px; border-radius:20px; text-transform:uppercase; letter-spacing:0.5px; }
+  .qstatus.open { background:#EAF7EF; color: var(--good); }
+  .qstatus.locked { background:#FCEEED; color: var(--bad); }
+  .quiz-toggle-btn { margin:0; padding:7px 14px; font-size:12.5px; }
+  .quiz-toggle-btn.to-open { background: var(--good); }
+  .quiz-toggle-btn.to-open:hover { background: #175c35; }
+  .manage-section { margin-bottom: 28px; }
 </style>
 </head>
 <body>
@@ -135,6 +145,7 @@ const supabase = createClient("${SUPABASE_URL}", "${SUPABASE_ANON_KEY}");
 const ADMIN_URL = "${ADMIN_FUNCTION_URL}";
 const app = document.getElementById("app");
 let activeTimerInterval = null;
+let ADMIN_PW = null;
 
 const COURSES = [
   { code: "bba251", name: "BBA 251: Business Economics I (Micro)", programme: "HRM / PSCM · Level 200", desc: "Scarcity, markets, consumer & producer theory, costs & revenue, market structures, and national income." }
@@ -182,7 +193,7 @@ async function renderCourse(code) {
   const course = COURSES.find(c => c.code === code);
   const { data: quizzes, error } = await supabase
     .from("quizzes")
-    .select("slug, day_number, title, time_limit_minutes")
+    .select("slug, day_number, title, time_limit_minutes, is_open")
     .eq("course_code", "BBA251")
     .order("day_number");
   if (error) { app.innerHTML = \`<div class="panel error">Could not load quizzes: \${esc(error.message)}</div>\`; return; }
@@ -193,10 +204,10 @@ async function renderCourse(code) {
   \`;
   const grid = document.getElementById("quiz-grid");
   quizzes.forEach(q => {
-    const card = el(\`<div class="card">
+    const card = el(\`<div class="card\${q.is_open ? "" : " locked-card"}">
       <div class="kicker">Day \${q.day_number} · \${q.time_limit_minutes} min</div>
       <h3>\${esc(q.title)}</h3>
-      <div class="badge">10 Questions</div>
+      \${q.is_open ? '<div class="badge">10 Questions</div>' : '<div class="badge locked">🔒 Locked</div>'}
     </div>\`);
     card.onclick = () => location.hash = "#/quiz/" + q.slug;
     grid.appendChild(card);
@@ -207,6 +218,16 @@ async function renderQuizStart(slug) {
   app.innerHTML = \`<div class="loading">Loading quiz…</div>\`;
   const { data: quiz, error } = await supabase.from("quizzes").select("*").eq("slug", slug).single();
   if (error || !quiz) { app.innerHTML = \`<div class="panel error">Quiz not found.</div>\`; return; }
+  if (!quiz.is_open) {
+    app.innerHTML = \`
+      <a class="backlink" onclick="location.hash='#/course/bba251'">← Back to quizzes</a>
+      <div class="panel">
+        <h2>\${esc(quiz.title)}</h2>
+        <p style="color:var(--muted); font-size:14px;">🔒 This quiz isn't open yet. Your lecturer will enable it closer to when it's due — please check back later.</p>
+      </div>
+    \`;
+    return;
+  }
   app.innerHTML = \`
     <a class="backlink" onclick="location.hash='#/course/bba251'">← Back to quizzes</a>
     <div class="panel">
@@ -415,7 +436,8 @@ function renderAdminLogin() {
         btn.disabled = false; btn.textContent = "View Results";
         return;
       }
-      renderAdminDashboard(data.submissions || []);
+      ADMIN_PW = pw;
+      renderAdminDashboard(data.submissions || [], data.quizzes || []);
     } catch (e) {
       document.getElementById("admin-error").innerHTML = \`<div class="error">Network error: \${esc(e.message)}</div>\`;
       btn.disabled = false; btn.textContent = "View Results";
@@ -437,7 +459,8 @@ function toCsv(rows) {
   return lines.join("\\n");
 }
 
-function renderAdminDashboard(rows) {
+function renderAdminDashboard(rows, quizzes) {
+  quizzes = quizzes || [];
   const totalSubs = rows.length;
   const uniqueStudents = new Set(rows.map(r => r.student_name + "|" + (r.student_index || ""))).size;
   const avgPct = rows.length
@@ -459,7 +482,24 @@ function renderAdminDashboard(rows) {
     <tr class="detail-row" id="detail-row-\${idx}" style="display:none;"><td colspan="7">\${renderSubmissionDetails(r)}</td></tr>
   \`).join("");
 
+  const quizRows = quizzes.map(q => \`
+    <tr>
+      <td>Day \${q.day_number}</td>
+      <td>\${esc(q.title)}</td>
+      <td><span class="qstatus \${q.is_open ? "open" : "locked"}">\${q.is_open ? "Open" : "Locked"}</span></td>
+      <td><button class="quiz-toggle-btn \${q.is_open ? "" : "to-open"}" data-quiz-id="\${q.id}" data-is-open="\${q.is_open}">\${q.is_open ? "Lock" : "Open"}</button></td>
+    </tr>
+  \`).join("");
+
   app.innerHTML = \`
+    <div class="manage-section">
+      <h2 style="margin:0 0 14px;color:var(--navy);font-family:Georgia,serif;">Manage Quizzes — BBA 251</h2>
+      <p style="color:var(--muted);font-size:13.5px;margin:0 0 14px;">Students can only start a quiz once you've switched it to <strong>Open</strong>. Everyone can still see the quiz titles either way.</p>
+      <table>
+        <thead><tr><th>Day</th><th>Quiz</th><th>Status</th><th>Action</th></tr></thead>
+        <tbody>\${quizRows || '<tr><td colspan="4" style="text-align:center;color:var(--muted);">No quizzes found.</td></tr>'}</tbody>
+      </table>
+    </div>
     <div class="toolbar">
       <h2 style="margin:0;color:var(--navy);font-family:Georgia,serif;">Student Results — BBA 251</h2>
       <button id="csv-btn" style="margin:0;">⬇ Download CSV</button>
@@ -482,6 +522,26 @@ function renderAdminDashboard(rows) {
       const showing = row.style.display !== "none";
       row.style.display = showing ? "none" : "table-row";
       btn.textContent = showing ? "View Answers" : "Hide Answers";
+    };
+  });
+  document.querySelectorAll(".quiz-toggle-btn").forEach(btn => {
+    btn.onclick = async () => {
+      const quizId = btn.dataset.quizId;
+      const newIsOpen = btn.dataset.isOpen !== "true";
+      btn.disabled = true; btn.textContent = "…";
+      try {
+        const res = await fetch(ADMIN_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password: ADMIN_PW, action: "toggle_quiz", quiz_id: quizId, is_open: newIsOpen })
+        });
+        const data = await res.json();
+        if (!res.ok) { alert(data.error || "Could not update quiz."); btn.disabled = false; return; }
+        renderAdminDashboard(data.submissions || [], data.quizzes || []);
+      } catch (e) {
+        alert("Network error: " + e.message);
+        btn.disabled = false;
+      }
     };
   });
   document.getElementById("csv-btn").onclick = () => {

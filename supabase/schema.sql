@@ -11,6 +11,7 @@ create table if not exists quizzes (
   day_number integer,
   title text not null,
   time_limit_minutes integer not null default 10,
+  is_open boolean not null default false, -- lecturer must switch a quiz to "open" before students can take it
   created_at timestamptz not null default now()
 );
 
@@ -43,15 +44,11 @@ alter table quizzes enable row level security;
 alter table questions enable row level security;
 alter table submissions enable row level security;
 
--- Anyone (anon key) can read quizzes and questions to take a quiz.
+-- Anyone (anon key) can read quiz titles/metadata, so potential and current
+-- students can see what's available even before a quiz is opened.
 create policy "public read quizzes" on quizzes
   for select using (true);
 
-create policy "public read questions" on questions
-  for select using (true);
-
--- Anyone can submit a quiz attempt, but cannot read submissions directly
--- (the admin dashboard reads submissions via the service-role "admin" edge
--- function instead, which is gated by ADMIN_PASSWORD).
-create policy "public insert submissions" on submissions
-  for insert with check (true);
+-- Question content is only readable once the parent quiz has been switched
+-- to is_open = true by the lecturer. This is enforced at the database level
+-- (not just hidden in the UI) so 
