@@ -463,6 +463,63 @@ function renderStudentLogin() {
   };
 }
 
+function gradeLetter(total) {
+  if (total < 40) return "F";
+  if (total < 50) return "D";
+  if (total < 60) return "C";
+  if (total < 70) return "B";
+  return "A";
+}
+
+function computeAssessment(student, quizzes, submissions, forecast) {
+  const total = quizzes.length;
+  let quizSum = 0;
+  quizzes.forEach(q => {
+    const sub = submissions.find(s => s.quiz_id === q.id);
+    if (sub) {
+      const effScore = sub.effective_score ?? sub.score;
+      const effMax = sub.effective_max ?? sub.max_score;
+      quizSum += effMax ? effScore / effMax : 0;
+    } else {
+      quizSum += forecast ? 1 : 0;
+    }
+  });
+  const quizAvgPct = total ? (quizSum / total) * 100 : 0;
+
+  const exercisePct = student.exercise_score != null ? student.exercise_score : (forecast ? 100 : 0);
+  const finalPct = student.final_exam_score != null ? student.final_exam_score : (forecast ? 100 : 0);
+
+  const assignment = (exercisePct / 100) * 10;
+  const quiz = (quizAvgPct / 100) * 5;
+  const midsem = (quizAvgPct / 100) * 15;
+  const finalScore = (finalPct / 100) * 70;
+  const subtotal = assignment + quiz + midsem;
+  const totalScore = subtotal + finalScore;
+  return {
+    quizAvgPct, assignment, quiz, midsem, subtotal, final: finalScore, total: totalScore,
+    grade: student.is_ic ? "IC" : gradeLetter(totalScore)
+  };
+}
+
+function renderAssessmentTable(label, note, a) {
+  return \`
+    <div class="section-title" style="margin-top:24px;">\${label}</div>
+    \${note ? \`<p style="color:var(--muted); font-size:12.5px; margin:0 0 10px;">\${note}</p>\` : ""}
+    <table>
+      <thead><tr><th>Component</th><th>Weight</th><th>Score</th></tr></thead>
+      <tbody>
+        <tr><td>Assignment</td><td>10%</td><td>\${a.assignment.toFixed(1)}</td></tr>
+        <tr><td>Quiz</td><td>5%</td><td>\${a.quiz.toFixed(1)}</td></tr>
+        <tr><td>Mid-Sem</td><td>15%</td><td>\${a.midsem.toFixed(1)}</td></tr>
+        <tr><td><strong>Subtotal</strong></td><td>30%</td><td><strong>\${a.subtotal.toFixed(1)}</strong></td></tr>
+        <tr><td>Final Exam</td><td>70%</td><td>\${a.final.toFixed(1)}</td></tr>
+        <tr><td><strong>Total</strong></td><td>100%</td><td><strong>\${a.total.toFixed(1)}</strong></td></tr>
+        <tr><td colspan="2"><strong>Grade</strong></td><td><strong>\${a.grade}</strong></td></tr>
+      </tbody>
+    </table>
+  \`;
+}
+
 function renderStudentProfile(data) {
   const student = data.student || {};
   const quizzes = data.quizzes || [];
@@ -500,6 +557,9 @@ function renderStudentProfile(data) {
       }, 0) / takenSubs.length) * 100)
     : null;
 
+  const officialA = computeAssessment(student, quizzes, submissions, false);
+  const forecastA = computeAssessment(student, quizzes, submissions, true);
+
   app.innerHTML = \`
     <a class="backlink" onclick="location.hash='#/'">← Back home</a>
     <div class="panel">
@@ -513,13 +573,15 @@ function renderStudentProfile(data) {
       <div class="stat-cards" style="margin-top:20px;">
         <div class="stat"><div class="n">\${takenSubs.length} / \${quizzes.length}</div><div class="l">Quizzes Taken</div></div>
         <div class="stat"><div class="n">\${quizAvgPct === null ? "—" : quizAvgPct + "%"}</div><div class="l">Quiz Average</div></div>
+        <div class="stat"><div class="n">\${officialA.grade}</div><div class="l">Current Grade</div></div>
       </div>
       <div class="section-title" style="margin-top:24px;">Daily Performance</div>
       <table>
         <thead><tr><th>Day</th><th>Quiz</th><th>Status</th><th>Score</th></tr></thead>
         <tbody>\${rows || '<tr><td colspan="4" style="text-align:center;color:var(--muted);">No quizzes found.</td></tr>'}</tbody>
       </table>
-      <p style="color:var(--muted); font-size:12.5px; margin-top:18px;">Forecast grade and official assessment breakdown (Assignment / Quiz / Mid-Sem / Final) will appear here in a future update.</p>
+      \${renderAssessmentTable("Forecast Grade", "Projects your grade assuming maximum marks on everything not yet completed or entered.", forecastA)}
+      \${renderAssessmentTable("Official Assessment", "Based only on work completed and scores entered so far. Missing components currently count as zero.", officialA)}
     </div>
   \`;
 }
