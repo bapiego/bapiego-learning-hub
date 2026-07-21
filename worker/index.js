@@ -1220,9 +1220,10 @@ function renderAdminDashboard(rows, quizzes, students, grants, offerings) {
         <p style="color:var(--muted);font-size:13.5px;margin:0 0 12px;">Already have this person in the system for another course? Add them here instead of re-entering their details — they'll keep the same login.</p>
         <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
           <div style="flex:1;min-width:220px;"><label style="margin-top:0;">Student</label>
-            <select id="enroll-existing-student">
+            <select id="enroll-existing-student" multiple size="8" style="height:auto;">
               \${students.map(s => \`<option value="\${s.id}">\${esc(s.full_name)} (\${esc(s.index_number)}) — currently: \${esc(courseLabel(s))}</option>\`).join("")}
             </select>
+            <div style="font-size:12px;color:var(--muted);margin-top:4px;">Ctrl/Cmd-click to select multiple students.</div>
           </div>
           <div style="flex:1;min-width:140px;"><label style="margin-top:0;">Course to Add</label>
             <select id="enroll-existing-course">
@@ -1743,15 +1744,15 @@ function renderAdminDashboard(rows, quizzes, students, grants, offerings) {
   };
   if (document.getElementById("enroll-existing-btn")) document.getElementById("enroll-existing-btn").onclick = async () => {
     const btn = document.getElementById("enroll-existing-btn");
-    const studentId = document.getElementById("enroll-existing-student").value;
+    const studentIds = Array.from(document.getElementById("enroll-existing-student").selectedOptions).map(o => o.value);
     const courseCode = document.getElementById("enroll-existing-course").value;
-    if (!studentId || !courseCode) return;
+    if (!studentIds.length || !courseCode) return;
     btn.disabled = true; btn.textContent = "Enrolling…";
     try {
       const res = await fetch(ADMIN_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password: ADMIN_PW, action: "enroll_student", student_id: studentId, course_code: courseCode })
+        body: JSON.stringify({ password: ADMIN_PW, action: "enroll_student", student_ids: studentIds, course_code: courseCode })
       });
       const data = await res.json();
       if (!res.ok) {
