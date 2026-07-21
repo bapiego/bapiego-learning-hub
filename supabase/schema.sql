@@ -182,3 +182,118 @@ create table if not exists sms_log (
 
 alter table sms_log enable row level security;
 -- No policies: only the service-role key (used inside edge functions) can read/write.
+
+-- Phase: paid quiz reopening — per-student temporary access grants. Lets the
+-- lecturer reopen a locked quiz for one or a batch of specific students
+-- (e.g. a paid retake) without unlocking it for the whole class.
+
+create table if not exists quiz_access_grants (
+  id uuid primary key default gen_random_uuid(),
+  student_id uuid not null references students(id) on delete cascade,
+  quiz_id uuid not null references quizzes(id) on delete cascade,
+  granted_at timestamptz not null default now(),
+  expires_at timestamptz not null,
+  used_at timestamptz,
+  note text
+);
+
+create index if not exists idx_quiz_access_grants_active
+  on quiz_access_grants (quiz_id, student_id)
+  where used_at is null;
+
+alter table quiz_access_grants enable row level security;
+-- No anon/authenticated policies on purpose — only the service-role key
+-- (used inside the "admin" edge function) can read/write grants directly.
+-- Students interact with grants only indirectly via the security-definer
+-- functions below, which the "submissions"/"questions" RLS policies call.
+
+create or replace function has_active_grant_for_student(p_quiz_id uuid, p_student_index text)
+returns boolean
+language sql
+security definer
+set search_path = public, extensions
+as $$
+  select exists (
+    select 1
+    from quiz_access_grants g
+    join students st on st.id = g.student_id
+    where g.quiz_id = p_quiz_id
+      and lower(trim(st.index_number)) = lower(trim(p_student_index))
+      and g.used_at is null
+      and g.expires_at > now()
+  );
+$$;
+
+create or replace function has_any_active_grant(p_quiz_id uuid)
+returns boolean
+language sql
+security definer
+set search_path = public, extensions
+as $$
+  select exists (
+    select 1 from quiz_access_grants g
+    where g.quiz_id = p_quiz_id
+      and g.used_at is null
+      and g.expires_at > now()
+  );
+$$;
+
+create or replace function can_submit_quiz(p_quiz_id uuid, p_student_index text)
+returns boolean
+language sql
+security definer
+set search_path = public, extensions
+as $$
+  select
+    exists (select 1 from quizzes q where q.id = p_quiz_id and q.is_open = true)
+    or has_active_grant_for_student(p_quiz_id, p_student_index);
+$$;
+
+drop policy if exists "public insert submissions" on submissions;
+create policy "insert submissions when open or granted" on submissions
+  for insert with check (can_submit_quiz(quiz_id, student_index));
+
+drop policy if exists "read questions of open quizzes" on questions;
+create policy "read questions of open or granted quizzes" on questions
+  for select using (
+    exists (select 1 from quizzes q where q.id = questions.quiz_id and q.is_open = true)
+    or has_any_active_grant(questions.quiz_id)
+  );
+
+create or replace function consume_quiz_grant()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  v_student_id uuid;
+  v_grant_id uuid;
+begin
+  select id into v_student_id from students
+   where lower(trim(index_number)) = lower(trim(new.student_index))
+   limit 1;
+
+  if v_student_id is not null then
+    select id into v_grant_id
+      from quiz_access_grants
+     where student_id = v_student_id
+       and quiz_id = new.quiz_id
+       and used_at is null
+       and expires_at > now()
+     order by granted_at asc
+     limit 1;
+
+    if v_grant_id is not null then
+      update quiz_access_grants set used_at = now() where id = v_grant_id;
+    end if;
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_consume_quiz_grant on submissions;
+create trigger trg_consume_quiz_grant
+  after insert on submissions
+  for each row execute function consume_quiz_grant();

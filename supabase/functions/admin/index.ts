@@ -73,6 +73,16 @@ async function fetchStudentById(studentId: string) {
   return rows[0] ?? null;
 }
 
+async function fetchQuizAccessGrants() {
+  const nowIso = new Date().toISOString();
+  const res = await fetch(
+    `${SUPABASE_URL}/rest/v1/quiz_access_grants?select=id,quiz_id,student_id,granted_at,expires_at,students(full_name,index_number),quizzes(title,day_number)&used_at=is.null&expires_at=gt.${encodeURIComponent(nowIso)}&order=expires_at.asc`,
+    { headers: SERVICE_HEADERS }
+  );
+  if (!res.ok) throw new Error(`Failed to fetch access grants (${res.status})`);
+  return await res.json();
+}
+
 async function logSms(studentId: string | null, phone: string, message: string, trigger: string, success: boolean, responseSnippet: string | null) {
   try {
     await fetch(`${SUPABASE_URL}/rest/v1/sms_log`, {
@@ -147,7 +157,7 @@ async function toggleQuiz(quizId: string, isOpen: boolean) {
     const students = await fetchStudents();
     for (const s of students) {
       if (!s.phone) continue;
-      const message = `Hi ${s.full_name}, "${before.title}" (Day ${before.day_number}) is now open on the Bapiego Learning Hub. Log in to take it.`;
+      const message = `Hi ${s.full_name}, "${before.title}" (Day ${before.day_number}) is now open on the Bapiego Learning Hub. Log in to take it: https://bapiego-learning-hub.sabapiego.workers.dev/#/profile`;
       await sendSms(s.id, s.phone, message, "quiz_open");
     }
   } else if (before.is_open && !isOpen) {
@@ -160,7 +170,7 @@ async function toggleQuiz(quizId: string, isOpen: boolean) {
     for (const s of students) {
       if (!s.phone) continue;
       if (submittedIndexes.has(norm(s.index_number))) continue;
-      const message = `Hi ${s.full_name}, you did not submit "${before.title}" (Day ${before.day_number}) before it closed. Please see your lecturer if you have concerns.`;
+      const message = `Hi ${s.full_name}, you did not submit "${before.title}" (Day ${before.day_number}) before it closed. Please see your lecturer if you have concerns: https://bapiego-learning-hub.sabapiego.workers.dev/#/profile`;
       await sendSms(s.id, s.phone, message, "missed_quiz");
     }
   }
@@ -194,7 +204,7 @@ async function addStudent(
   });
   const created = rows[0]; // { id, full_name, index_number, pin, phone }
   if (created?.phone) {
-    const message = `Hi ${created.full_name}, welcome to the Bapiego Learning Hub (BBA 251). Your index number is ${created.index_number} and your login PIN is ${created.pin}. Keep this PIN safe.`;
+    const message = `Hi ${created.full_name}, welcome to the Bapiego Learning Hub (BBA 251). Your index number is ${created.index_number} and your login PIN is ${created.pin}. Keep this PIN safe. Log in here: https://bapiego-learning-hub.sabapiego.workers.dev/#/profile`;
     await sendSms(created.id, created.phone, message, "pin_issued");
   }
   return created;
@@ -205,7 +215,7 @@ async function regeneratePin(studentId: string) {
   const result = rows[0]; // { id, pin }
   const student = await fetchStudentById(studentId);
   if (student?.phone) {
-    const message = `Hi ${student.full_name}, your Bapiego Learning Hub PIN has been reset. Your new PIN is ${result.pin}.`;
+    const message = `Hi ${student.full_name}, your Bapiego Learning Hub PIN has been reset. Your new PIN is ${result.pin}. Log in here: https://bapiego-learning-hub.sabapiego.workers.dev/#/profile`;
     await sendSms(studentId, student.phone, message, "pin_issued");
   }
   return result;
@@ -239,7 +249,7 @@ async function updateFinalExamScore(studentId: string, score: number | null) {
   if (score !== null) {
     const student = await fetchStudentById(studentId);
     if (student?.phone) {
-      const message = `Hi ${student.full_name}, your final exam score has been recorded: ${score}/100. Log in to the Bapiego Learning Hub to view your full grade breakdown.`;
+      const message = `Hi ${student.full_name}, your final exam score has been recorded: ${score}/100. Log in to view your full grade breakdown: https://bapiego-learning-hub.sabapiego.workers.dev/#/profile`;
       await sendSms(studentId, student.phone, message, "final_grade");
     }
   }
@@ -291,6 +301,74 @@ async function updateStudentContact(studentId: string, phone: string | null, pro
     body: JSON.stringify({ phone, programme, email }),
   });
   if (!res.ok) throw new Error(`Failed to update student contact info (${res.status})`);
+}
+
+async function deleteStudent(studentId: string) {
+  const existing = await fetchStudentById(studentId);
+  if (!existing) throw new Error("Student not found");
+
+  // Best-effort: remove their quiz submissions too, so deleted students don't
+  // linger in the results table. Never lets this block the actual deletion.
+  try {
+    if (existing.index_number && existing.index_number.trim()) {
+      await fetch(`${SUPABASE_URL}/rest/v1/submissions?student_index=ilike.${encodeURIComponent(existing.index_number.trim())}`, {
+        method: "DELETE",
+        headers: { ...SERVICE_HEADERS, Prefer: "return=minimal" },
+      });
+    }
+  } catch {
+    // Ignore — proceed to delete the student record regardless.
+  }
+
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/students?id=eq.${studentId}`, {
+    method: "DELETE",
+    headers: { ...SERVICE_HEADERS, Prefer: "return=minimal" },
+  });
+  if (!res.ok) throw new Error(`Failed to delete student (${res.status})`);
+}
+
+async function grantQuizAccess(quizId: string, studentIds: string[], hours: number, note: string | null) {
+  const quiz = await fetchQuizById(quizId);
+  if (!quiz) throw new Error("Quiz not found");
+  if (!studentIds.length) throw new Error("Select at least one student");
+
+  const expiresAt = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
+  const rows = studentIds.map((sid) => ({
+    student_id: sid,
+    quiz_id: quizId,
+    expires_at: expiresAt,
+    note: note || null,
+  }));
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/quiz_access_grants`, {
+    method: "POST",
+    headers: { ...SERVICE_HEADERS, "Content-Type": "application/json", Prefer: "return=representation" },
+    body: JSON.stringify(rows),
+  });
+  if (!res.ok) throw new Error(`Failed to grant access (${res.status})`);
+  const created = await res.json();
+
+  const students = await fetchStudents();
+  const expiresLabel = new Date(expiresAt).toLocaleString("en-GB", {
+    weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
+  });
+  let notified = 0;
+  for (const sid of studentIds) {
+    const student = students.find((s: any) => s.id === sid);
+    if (student?.phone) {
+      const message = `Hi ${student.full_name}, "${quiz.title}" (Day ${quiz.day_number}) has been reopened just for you until ${expiresLabel}. Log in to take it: https://bapiego-learning-hub.sabapiego.workers.dev/#/profile`;
+      const ok = await sendSms(student.id, student.phone, message, "quiz_reopened");
+      if (ok) notified++;
+    }
+  }
+  return { granted: created.length, notified, expires_at: expiresAt };
+}
+
+async function revokeQuizAccess(grantId: string) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/quiz_access_grants?id=eq.${grantId}`, {
+    method: "DELETE",
+    headers: { ...SERVICE_HEADERS, Prefer: "return=minimal" },
+  });
+  if (!res.ok) throw new Error(`Failed to revoke access (${res.status})`);
 }
 
 async function sendBroadcast(message: string, studentId: string | null) {
@@ -359,11 +437,12 @@ function buildDetails(submission: any, questionsByQuiz: Record<string, any[]>) {
 }
 
 async function buildFullPayload() {
-  const [submissions, questions, quizzes, students] = await Promise.all([
+  const [submissions, questions, quizzes, students, grants] = await Promise.all([
     fetchSubmissions(),
     fetchQuestions(),
     fetchQuizzes(),
     fetchStudents(),
+    fetchQuizAccessGrants(),
   ]);
   const questionsByQuiz: Record<string, any[]> = {};
   for (const q of questions) {
@@ -381,7 +460,7 @@ async function buildFullPayload() {
     s.effective_score = (s.score || 0) + manualTotal;
     s.effective_max = qs.length || s.max_score;
   }
-  return { submissions, quizzes, students };
+  return { submissions, quizzes, students, grants };
 }
 
 Deno.serve(async (req) => {
@@ -412,6 +491,10 @@ Deno.serve(async (req) => {
     question_id?: string;
     score?: number;
     message?: string;
+    student_ids?: string[];
+    hours?: number;
+    note?: string | null;
+    grant_id?: string;
   };
   try {
     body = await req.json();
@@ -502,6 +585,13 @@ Deno.serve(async (req) => {
         });
       }
       await updateStudentContact(body.student_id, body.phone ?? null, body.programme ?? null, body.email ?? null);
+    } else if (body.action === "delete_student") {
+      if (!body.student_id) {
+        return new Response(JSON.stringify({ error: "student_id is required" }), {
+          status: 400, headers: { "Content-Type": "application/json", ...CORS }
+        });
+      }
+      await deleteStudent(body.student_id);
     } else if (body.action === "send_broadcast") {
       if (!body.message || !body.message.trim()) {
         return new Response(JSON.stringify({ error: "message is required" }), {
@@ -521,6 +611,21 @@ Deno.serve(async (req) => {
         });
       }
       await gradeShortAnswer(body.submission_id, body.question_id, body.score);
+    } else if (body.action === "grant_quiz_access") {
+      if (!body.quiz_id || !Array.isArray(body.student_ids) || !body.student_ids.length) {
+        return new Response(JSON.stringify({ error: "quiz_id and at least one student_id are required" }), {
+          status: 400, headers: { "Content-Type": "application/json", ...CORS }
+        });
+      }
+      const hours = typeof body.hours === "number" && body.hours > 0 ? body.hours : 24;
+      lastAction = await grantQuizAccess(body.quiz_id, body.student_ids, hours, body.note ?? null);
+    } else if (body.action === "revoke_quiz_access") {
+      if (!body.grant_id) {
+        return new Response(JSON.stringify({ error: "grant_id is required" }), {
+          status: 400, headers: { "Content-Type": "application/json", ...CORS }
+        });
+      }
+      await revokeQuizAccess(body.grant_id);
     }
     const payload = await buildFullPayload();
     return new Response(JSON.stringify({ ...payload, last_action: lastAction }), {

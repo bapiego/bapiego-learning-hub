@@ -55,6 +55,16 @@ async function fetchSubmissionsForStudent(indexNumber: string) {
   return all.filter((s: any) => norm(s.student_index) === norm(indexNumber));
 }
 
+async function fetchActiveGrants(studentId: string) {
+  const nowIso = new Date().toISOString();
+  const res = await fetch(
+    `${SUPABASE_URL}/rest/v1/quiz_access_grants?select=id,quiz_id,expires_at&student_id=eq.${studentId}&used_at=is.null&expires_at=gt.${encodeURIComponent(nowIso)}`,
+    { headers: SERVICE_HEADERS }
+  );
+  if (!res.ok) throw new Error(`Failed to fetch access grants (${res.status})`);
+  return await res.json();
+}
+
 async function fetchQuestionCounts(quizIds: string[]): Promise<Record<string, number>> {
   if (!quizIds.length) return {};
   const idsParam = quizIds.join(",");
@@ -102,9 +112,10 @@ Deno.serve(async (req) => {
       });
     }
     const student = await fetchStudent(studentId);
-    const [quizzes, submissions] = await Promise.all([
+    const [quizzes, submissions, grants] = await Promise.all([
       fetchQuizzes(courseCode),
       fetchSubmissionsForStudent(student.index_number),
+      fetchActiveGrants(studentId),
     ]);
     const counts = await fetchQuestionCounts(quizzes.map((q: any) => q.id));
     for (const s of submissions) {
@@ -116,7 +127,7 @@ Deno.serve(async (req) => {
       s.effective_score = (s.score || 0) + manualTotal;
       s.effective_max = counts[s.quiz_id] || s.max_score;
     }
-    return new Response(JSON.stringify({ student, quizzes, submissions }), {
+    return new Response(JSON.stringify({ student, quizzes, submissions, grants }), {
       headers: { "Content-Type": "application/json", ...CORS }
     });
   } catch (e) {
